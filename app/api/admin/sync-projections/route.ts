@@ -1,77 +1,117 @@
 ﻿import { NextResponse } from 'next/server';
-import { doc, setDoc, deleteDoc } from 'firebase/firestore'; 
+import { doc, setDoc } from 'firebase/firestore'; 
 import { db } from '@/lib/firebase';
 
-export const dynamic = 'force-dynamic'; // Ensure this never caches
-
-// CONFIG
-const ROUND_TO_DOC_ID: Record<string, string> = {
-  'wildcard': 'nfl_post_week_1',
-  'divisional': 'nfl_post_week_2',
-  'conference': 'nfl_post_week_3',
-  'superbowl': 'nfl_post_week_4'
-};
+// Force Next.js to run this fresh every time (no caching)
+export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const round = searchParams.get('round') || 'wildcard';
-  
-  // FIX: Define docId BEFORE using it in logs
-  const docId = ROUND_TO_DOC_ID[round];
-
-  // --- DEBUG OVERRIDE ---
-  const DEBUG_WEEK = '18'; 
-  const SEASON = '2025'; 
-
-  console.log(`[Sync] 🚀 STARTING NUCLEAR SYNC`);
-  console.log(`[Sync] Target Document: system_cache/${docId}`);
-  console.log(`[Sync] API Target: Week ${DEBUG_WEEK}, Season ${SEASON}`);
-
   try {
-    // 1. DELETE EXISTING DATA
-    const docRef = doc(db, 'system_cache', docId);
-    await deleteDoc(docRef);
-    console.log(`[Sync] 🗑️ Deleted old document: ${docId}`);
+    // --- 0. SECURITY CHECK ---
+    // Allow if it's Vercel Cron (header) OR if you manually provided the secret key
+    const authHeader = request.headers.get('authorization');
+    const { searchParams } = new URL(request.url);
+    const secret = searchParams.get('secret');
 
-    // 2. FETCH REAL API DATA
-    const url = `https://tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com/getNFLProjections?week=${DEBUG_WEEK}&season=${SEASON}&itemFormat=list`;
+    // Note: Vercel sends "Bearer cron_..." automatically
+    const isCron = authHeader && authHeader.startsWith('Bearer cron_');
+    const isAdmin = secret === 'Touchdown2026'; // Your manual backdoor password
+
+    if (!isCron && !isAdmin) {
+       return NextResponse.json({ error: 'Unauthorized: Missing Vercel Cron header or Admin Secret' }, { status: 401 });
+    }
+
+    // --- 1. GET CURRENT NFL CONTEXT ---
+    // Format today as YYYYMMDD for the API
+    const today = new Date().toISOString().split('T')[0].replace(/-/g, '');
     
-    const response = await fetch(url, {
+    console.log(`[Sync] 📡 Step 1: Fetching Current NFL Info for date: ${today}`);
+
+    const infoUrl = `https://tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com/getNFLCurrentInfo?date=${today}`;
+    const infoResponse = await fetch(infoUrl, {
       method: 'GET',
       headers: {
-        'x-rapidapi-key': '85657f0983msh1fda8640dd67e05p1bb7bejsn3e59722b8c1e', 
+        'x-rapidapi-key': process.env.NEXT_PUBLIC_RAPIDAPI_KEY || '',
         'x-rapidapi-host': 'tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com'
       }
     });
 
-    const data = await response.json();
-    let cleanProjections = data.body?.playerProjections || data.body || [];
+    const infoData = await infoResponse.json();
+    const currentInfo = infoData.body; 
 
-    if (!Array.isArray(cleanProjections) || cleanProjections.length === 0) {
-       console.error(`[Sync] ❌ API returned 0 players. Response:`, JSON.stringify(data).substring(0, 100));
-       return NextResponse.json({ success: false, message: "API returned 0 players. Check Season/Week param." });
+    if (!currentInfo) {
+      throw new Error("Could not fetch NFL Current Info. API Key might be invalid.");
     }
 
-    console.log(`[Sync] ✅ API Success. Fetched ${cleanProjections.length} players.`);
+    // Extract the "Real" Time from the API
+    const currentWeek = currentInfo.week;         // e.g. "19"
+    const currentSeason = currentInfo.season;     // e.g. "2025"
+    const seasonType = currentInfo.seasonType;    // e.g. "post" or "reg"
 
-    // 3. SAVE NEW DATA
-    await setDoc(docRef, {
-        lastUpdated: new Date().toISOString(),
-        sourceRound: round,
-        sourceWeek: DEBUG_WEEK,
-        playerProjections: cleanProjections 
+    console.log(`[Sync] ⏱️ API Says: Week ${currentWeek}, Season ${currentSeason} (${seasonType})`);
+
+    // --- 2. DETERMINE DATABASE DESTINATION ---
+    let docId = '';
+    
+    if (seasonType === 'post' || parseInt(currentWeek) > 18) {
+        // PLAYOFF MAPPING logic
+        // Tank01: Week 19 = Wildcard (1), 20 = Div (2), 21 = Conf (3), 22 = SB (4)
+        const playoffIndex = parseInt(currentWeek) - 18; 
+        
+        // Safety check: ensure index is valid (1-4)
+        const safeIndex = Math.max(1, Math.min(playoffIndex, 4));
+        
+        docId = `nfl_post_week_${safeIndex}`;
+        console.log(`[Sync] 🎯 Mode: Playoffs (Round ${safeIndex}) -> Saving to ${docId}`);
+    } else {
+        // REGULAR SEASON MAPPING logic
+        docId = `nfl_reg_week_${currentWeek}`;
+        console.log(`[Sync] 🎯 Mode: Regular Season -> Saving to ${docId}`);
+    }
+
+    // --- 3. FETCH PROJECTIONS ---
+    console.log(`[Sync] 🏈 Step 2: Fetching Projections for Week ${currentWeek}...`);
+    
+    const projUrl = `https://tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com/getNFLProjections?week=${currentWeek}&season=${currentSeason}&itemFormat=list`;
+    
+    const projResponse = await fetch(projUrl, {
+      method: 'GET',
+      headers: {
+        'x-rapidapi-key': process.env.NEXT_PUBLIC_RAPIDAPI_KEY || '', 
+        'x-rapidapi-host': 'tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com'
+      }
     });
 
-    console.log(`[Sync] 💾 Saved fresh data to Firestore.`);
-    
+    const projData = await projResponse.json();
+    let cleanProjections = projData.body?.playerProjections || projData.body || [];
+
+    // --- 4. SAVE TO FIREBASE ---
+    // If API is empty, we log it but maybe don't overwrite the DB (optional safety)
+    if (!Array.isArray(cleanProjections) || cleanProjections.length === 0) {
+       console.warn(`[Sync] ⚠️ Warning: API returned 0 players.`);
+       // We still return success so Cron doesn't retry infinitely, but we log the warning.
+       return NextResponse.json({ success: true, message: `Week ${currentWeek} has 0 projections (Offseason?). DB not updated.` });
+    }
+
+    const docRef = doc(db, 'system_cache', docId);
+    await setDoc(docRef, {
+        lastUpdated: new Date().toISOString(),
+        projections: cleanProjections,
+        meta: {
+            season: currentSeason,
+            week: currentWeek,
+            type: seasonType
+        }
+    });
+
     return NextResponse.json({ 
         success: true, 
-        message: `Overwrote ${docId} with ${cleanProjections.length} players from Week ${DEBUG_WEEK}`,
-        count: cleanProjections.length
+        message: `Auto-Synced ${cleanProjections.length} players to ${docId}`,
+        nflContext: { week: currentWeek, season: currentSeason, type: seasonType }
     });
 
   } catch (error: any) {
-    console.error("[Sync] 🔥 CRITICAL ERROR:", error);
+    console.error(`[Sync] 🔥 ERROR:`, error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

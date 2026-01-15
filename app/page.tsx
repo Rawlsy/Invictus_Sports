@@ -32,7 +32,7 @@ export default function LandingPage() {
         </h1>
         <p className="text-lg md:text-xl text-slate-400 mb-10 max-w-2xl mx-auto">
           Experience the next generation of league management. Real-time stats, 
-          deep dynasty customization, and zero ad-clutter for your league mates.
+          deep dynasty customization putting the power in the players. Play how you want to play.
         </p>
         <div className="flex flex-col sm:flex-row gap-4 justify-center">
           <Link 
