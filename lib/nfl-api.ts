@@ -1,15 +1,15 @@
 ﻿import { doc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 
-// 1. DEFINE THE INTERFACE (Matched EXACTLY to your League Page)
+// 1. DEFINE THE INTERFACE
 export interface NFLPlayer {
-  id: string;          // Page expects 'id', not 'playerID'
-  name: string;        // Page expects 'name', not 'longName'
+  id: string;
+  name: string;
   team: string;
-  position: string;    // Page expects 'position', not 'pos'
-  opponent?: string;   // Page tries to show "Team vs Opponent"
-  projection: number;  // Page expects 'projection', not 'fantasyPoints'
-  actualScore?: number;// Page handles 'actualScore'
+  position: string;
+  opponent?: string;
+  projection: number;
+  actualScore?: number;
 }
 
 // 2. HELPER: Map rounds to Firestore Doc IDs
@@ -37,20 +37,34 @@ export async function getNFLPlayers(roundOrWeek: string = 'wildcard'): Promise<N
 
     if (docSnap.exists()) {
       const data = docSnap.data();
-      const rawPlayers = data.projections || data.playerProjections || [];
+      
+      // --- CRITICAL FIX: CHECK ALL POSSIBLE PATHS ---
+      // Your screenshot shows the data is inside "payload.players"
+      const rawPlayers = 
+        data.payload?.players ||  // Check inside payload folder (NEW)
+        data.projections ||       // Check root level
+        data.playerProjections || // Check legacy name
+        [];
       
       console.log(`[API] ✅ Loading ${rawPlayers.length} players from ${docId}`);
 
       // 4. MAP DATA TO MATCH YOUR PAGE INTERFACE
       return rawPlayers.map((p: any) => ({
-        id: p.playerID || p.id, 
-        name: p.longName || p.name || 'Unknown',
-        team: p.team || 'FA',
-        position: p.pos || p.position || 'FLEX',
-        opponent: p.gameOpponent || p.opponent || 'BYE', // Tank01 often has gameOpponent
+        // Handle both ID formats
+        id: p.id || p.playerID, 
         
-        // Critical: Handle string/number conversion for scores
-        projection: Number(p.fantasyPoints || p.projectedPoints || p.projection || 0),
+        // Handle name formats
+        name: p.name || p.longName || 'Unknown',
+        
+        // Handle Team/Pos
+        team: p.team || 'FA',
+        position: p.position || p.pos || 'FLEX',
+        
+        // Handle Opponent (Tank01 often sends 'opponent' or 'gameOpponent')
+        opponent: p.opponent || p.gameOpponent || 'BYE', 
+        
+        // Handle Scores (projectedPoints vs fantasyPoints)
+        projection: Number(p.projectedPoints || p.fantasyPoints || p.projection || 0),
         actualScore: Number(p.actualScore || 0)
       }));
     }
