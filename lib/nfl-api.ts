@@ -1,7 +1,16 @@
 ﻿import { doc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 
-// Helper to determine the correct Document ID based on inputs
+// 1. DEFINE & EXPORT THE INTERFACE (This fixes the build error)
+export interface NFLPlayer {
+  playerID: string;
+  longName: string;
+  team: string;
+  pos: string;
+  fantasyPoints: number;
+}
+
+// 2. HELPER: Map rounds/weeks to Firestore Doc IDs
 function getDocId(roundOrWeek: string) {
   const playoffMap: Record<string, string> = {
     'wildcard': 'nfl_post_week_1',
@@ -19,7 +28,8 @@ function getDocId(roundOrWeek: string) {
   return `nfl_reg_week_${roundOrWeek}`;
 }
 
-export async function getNFLPlayers(roundOrWeek: string = 'wildcard') {
+// 3. MAIN FUNCTION
+export async function getNFLPlayers(roundOrWeek: string = 'wildcard'): Promise<NFLPlayer[]> {
   const docId = getDocId(roundOrWeek);
   console.log(`[API] Reading from Cache ID: ${docId}`);
 
@@ -29,16 +39,16 @@ export async function getNFLPlayers(roundOrWeek: string = 'wildcard') {
 
     if (docSnap.exists()) {
       const data = docSnap.data();
-      // Handle both naming conventions just in case
+      // Handle both naming conventions just in case (projections vs playerProjections)
       const players = data.projections || data.playerProjections || [];
       console.log(`[API] ✅ Found ${players.length} players`);
       
       return players.map((p: any) => ({
         playerID: p.playerID,
-        longName: p.longName || p.name,
-        team: p.team,
-        pos: p.pos,
-        fantasyPoints: p.fantasyPoints || p.projectedPoints || 0
+        longName: p.longName || p.name || 'Unknown Player',
+        team: p.team || 'FA',
+        pos: p.pos || 'Flex',
+        fantasyPoints: Number(p.fantasyPoints || p.projectedPoints || 0)
       }));
     }
     
