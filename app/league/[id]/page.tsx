@@ -5,7 +5,8 @@ import { useRouter, useParams } from 'next/navigation';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
-import { NFLPlayer } from '@/lib/nfl-api';
+// Ensure this import matches your library export
+import { NFLPlayer } from '@/lib/nfl-api'; 
 
 // --- CONFIG ---
 const ROUNDS = [
@@ -77,7 +78,7 @@ const GamesBar = ({ games }: { games: GameInfo[] }) => {
   );
 };
 
-// --- COMPONENT: PLAYER SELECTOR ---
+// --- COMPONENT: PLAYER SELECTOR (ROBUST VERSION) ---
 const PlayerSelector = ({ 
   isOpen, 
   onClose, 
@@ -94,26 +95,49 @@ const PlayerSelector = ({
   if (!isOpen) return null;
 
   const filteredPlayers = availablePlayers.filter(p => {
-    if (positionNeeded === 'FLEX') return ['RB', 'WR', 'TE'].includes(p.position);
-    if (positionNeeded === 'SUPERFLEX') return ['QB', 'RB', 'WR', 'TE'].includes(p.position);
-    return p.position === positionNeeded;
+    // Robust Check: Handle 'position' OR 'pos', and normalize case
+    // @ts-ignore
+    const rawPos = p.position || p.pos || ''; 
+    const playerPos = rawPos.toUpperCase();
+    const target = positionNeeded.toUpperCase();
+
+    // Debugging specific misses if needed
+    // if (target === 'QB' && playerPos !== 'QB') console.log('Skipping', p.name, playerPos);
+
+    if (target === 'FLEX') return ['RB', 'WR', 'TE'].includes(playerPos);
+    if (target === 'SUPERFLEX' || target === 'OP') return ['QB', 'RB', 'WR', 'TE'].includes(playerPos);
+    
+    return playerPos === target;
   });
+
+  // Sort by Projection (High to Low)
+  const sortedPlayers = filteredPlayers.sort((a, b) => (b.projection || 0) - (a.projection || 0));
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[80vh]">
+        
+        {/* Header */}
         <div className="bg-gray-50 px-6 py-4 border-b border-gray-100 flex justify-between items-center">
           <div>
-            <h3 className="font-bold text-gray-800">Select a {positionNeeded}</h3>
-            <p className="text-xs text-gray-500">Sorted by Name (A-Z)</p>
+            <h3 className="font-bold text-gray-800">Select {positionNeeded}</h3>
+            <p className="text-xs text-gray-500">{sortedPlayers.length} available</p>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 font-bold text-xl">✕</button>
         </div>
+
+        {/* List */}
         <div className="overflow-y-auto flex-1 p-4 space-y-2">
-          {filteredPlayers.length === 0 ? (
-            <div className="text-center py-10 text-gray-400">No available players found for {positionNeeded}.</div>
+          {sortedPlayers.length === 0 ? (
+            <div className="text-center py-10 text-gray-400 px-4">
+              <p className="font-bold">No players found.</p>
+              <p className="text-xs mt-2 text-gray-400">
+                 Debug: Loaded {availablePlayers.length} total players. 
+                 Looking for "{positionNeeded}".
+              </p>
+            </div>
           ) : (
-            filteredPlayers.map(player => (
+            sortedPlayers.map(player => (
               <div 
                 key={player.id}
                 onClick={() => onSelect(player)}
@@ -121,24 +145,15 @@ const PlayerSelector = ({
               >
                 <div className="flex items-center space-x-3">
                   <span className="bg-gray-100 text-gray-600 text-xs font-bold px-2 py-1 rounded w-12 text-center">
-                    {player.position}
+                    {player.position || 'N/A'}
                   </span>
                   <div>
                     <p className="font-bold text-gray-900 text-sm">{player.name}</p>
                     <div className="flex items-center gap-2 mt-0.5">
-                      <p className="text-xs text-gray-500">{player.team} vs {player.opponent}</p>
-                      
-                      {/* --- BADGES: PROJECTION & SCORE --- */}
+                      <p className="text-xs text-gray-500">{player.team} {player.opponent ? `vs ${player.opponent}` : ''}</p>
                       <span className="bg-green-50 text-green-700 text-[10px] font-bold px-1.5 py-0.5 rounded border border-green-100">
-                        Proj: {player.projection !== undefined ? Number(player.projection).toFixed(1) : '0.0'}
+                        Proj: {player.projection?.toFixed(1) || '0.0'}
                       </span>
-
-                      {player.actualScore !== undefined && player.actualScore > 0 && (
-                        <span className="bg-blue-50 text-blue-700 text-[10px] font-bold px-1.5 py-0.5 rounded border border-blue-100">
-                          Score: {Number(player.actualScore).toFixed(1)}
-                        </span>
-                      )}
-                      {/* ---------------------------------- */}
                     </div>
                   </div>
                 </div>
@@ -166,23 +181,20 @@ const SelectionsTab = ({ league, user }: { league: any, user: User }) => {
   const [selectingSlot, setSelectingSlot] = useState<{id: string, pos: string} | null>(null);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
 
-  useEffect(() => {
-    const checkLocks = async () => {
-      setUnlockedRounds(['wildcard']); 
-    };
-    checkLocks();
-  }, []);
-
+  // Load Round Data
   useEffect(() => {
     const fetchRoundData = async () => {
       setLoadingData(true);
       try {
+        // 1. Fetch Players from API
         const res = await fetch(`/api/nfl?round=${activeRound}`);
         const data = await res.json();
         
+        console.log(`[SelectionsTab] API Response for ${activeRound}:`, data);
         setAllPlayers(data.players || []);
         setGames(data.games || []);
 
+        // 2. Fetch User Lineup from Firestore
         const lineupRef = doc(db, 'leagues', league.id, 'lineups', `${user.uid}_${activeRound}`);
         const lineupSnap = await getDoc(lineupRef);
         
@@ -200,11 +212,11 @@ const SelectionsTab = ({ league, user }: { league: any, user: User }) => {
     fetchRoundData();
   }, [activeRound, league.id, user.uid]);
 
+  // Save Logic
   const saveLineupToFirestore = async (newLineup: Record<string, NFLPlayer | null>) => {
     setSaveStatus('saving');
     try {
       const lineupRef = doc(db, 'leagues', league.id, 'lineups', `${user.uid}_${activeRound}`);
-      
       await setDoc(lineupRef, {
         userId: user.uid,
         userName: user.displayName || 'Unknown',
@@ -212,7 +224,6 @@ const SelectionsTab = ({ league, user }: { league: any, user: User }) => {
         roster: newLineup,
         updatedAt: serverTimestamp()
       });
-      
       setSaveStatus('saved');
     } catch (error) {
       console.error("Auto-save failed:", error);
@@ -224,13 +235,11 @@ const SelectionsTab = ({ league, user }: { league: any, user: User }) => {
 
   const handlePlayerSelect = (player: NFLPlayer) => {
     if (selectingSlot) {
-      // Ensure we save numerical values
       const playerToSave = {
         ...player,
         projection: player.projection !== undefined ? Number(player.projection) : 0,
         actualScore: player.actualScore !== undefined ? Number(player.actualScore) : 0
       };
-
       const newLineup = { ...lineup, [selectingSlot.id]: playerToSave };
       setLineup(newLineup);
       saveLineupToFirestore(newLineup);
@@ -248,6 +257,7 @@ const SelectionsTab = ({ league, user }: { league: any, user: User }) => {
 
   return (
     <div>
+      {/* Round Selector */}
       <div className="flex space-x-1 bg-gray-100 p-1 rounded-lg overflow-x-auto mb-6">
         {ROUNDS.map((round) => {
           const isLocked = !unlockedRounds.includes(round.id);
@@ -311,19 +321,10 @@ const SelectionsTab = ({ league, user }: { league: any, user: User }) => {
                       <div>
                         <p className="font-bold text-gray-900 text-sm">{player.name}</p>
                         <div className="flex items-center gap-2 mt-1">
-                          <p className="text-xs text-gray-500">{player.team} vs {player.opponent}</p>
-                          
-                          {/* --- LINEUP BADGES --- */}
+                          <p className="text-xs text-gray-500">{player.team} {player.opponent ? `vs ${player.opponent}` : ''}</p>
                           <span className="bg-green-50 text-green-700 text-[10px] font-bold px-1.5 py-0.5 rounded border border-green-100">
                             Proj: {Number(player.projection).toFixed(1)}
                           </span>
-
-                          {player.actualScore !== undefined && player.actualScore > 0 && (
-                            <span className="bg-blue-50 text-blue-700 text-[10px] font-bold px-1.5 py-0.5 rounded border border-blue-100">
-                              Score: {Number(player.actualScore).toFixed(1)}
-                            </span>
-                          )}
-                          {/* --------------------- */}
                         </div>
                       </div>
                     ) : (

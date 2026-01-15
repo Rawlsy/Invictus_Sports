@@ -1,16 +1,18 @@
 ﻿import { doc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 
-// 1. DEFINE & EXPORT THE INTERFACE (This fixes the build error)
+// 1. DEFINE THE INTERFACE (Matched EXACTLY to your League Page)
 export interface NFLPlayer {
-  playerID: string;
-  longName: string;
+  id: string;          // Page expects 'id', not 'playerID'
+  name: string;        // Page expects 'name', not 'longName'
   team: string;
-  pos: string;
-  fantasyPoints: number;
+  position: string;    // Page expects 'position', not 'pos'
+  opponent?: string;   // Page tries to show "Team vs Opponent"
+  projection: number;  // Page expects 'projection', not 'fantasyPoints'
+  actualScore?: number;// Page handles 'actualScore'
 }
 
-// 2. HELPER: Map rounds/weeks to Firestore Doc IDs
+// 2. HELPER: Map rounds to Firestore Doc IDs
 function getDocId(roundOrWeek: string) {
   const playoffMap: Record<string, string> = {
     'wildcard': 'nfl_post_week_1',
@@ -19,36 +21,37 @@ function getDocId(roundOrWeek: string) {
     'superbowl': 'nfl_post_week_4'
   };
 
-  // If it's a known playoff round, return that ID
   if (playoffMap[roundOrWeek]) {
     return playoffMap[roundOrWeek];
   }
-  
-  // Otherwise, assume it is a regular season week number (e.g., "18", "1")
   return `nfl_reg_week_${roundOrWeek}`;
 }
 
 // 3. MAIN FUNCTION
 export async function getNFLPlayers(roundOrWeek: string = 'wildcard'): Promise<NFLPlayer[]> {
   const docId = getDocId(roundOrWeek);
-  console.log(`[API] Reading from Cache ID: ${docId}`);
-
+  
   try {
     const docRef = doc(db, 'system_cache', docId);
     const docSnap = await getDoc(docRef);
 
     if (docSnap.exists()) {
       const data = docSnap.data();
-      // Handle both naming conventions just in case (projections vs playerProjections)
-      const players = data.projections || data.playerProjections || [];
-      console.log(`[API] ✅ Found ${players.length} players`);
+      const rawPlayers = data.projections || data.playerProjections || [];
       
-      return players.map((p: any) => ({
-        playerID: p.playerID,
-        longName: p.longName || p.name || 'Unknown Player',
+      console.log(`[API] ✅ Loading ${rawPlayers.length} players from ${docId}`);
+
+      // 4. MAP DATA TO MATCH YOUR PAGE INTERFACE
+      return rawPlayers.map((p: any) => ({
+        id: p.playerID || p.id, 
+        name: p.longName || p.name || 'Unknown',
         team: p.team || 'FA',
-        pos: p.pos || 'Flex',
-        fantasyPoints: Number(p.fantasyPoints || p.projectedPoints || 0)
+        position: p.pos || p.position || 'FLEX',
+        opponent: p.gameOpponent || p.opponent || 'BYE', // Tank01 often has gameOpponent
+        
+        // Critical: Handle string/number conversion for scores
+        projection: Number(p.fantasyPoints || p.projectedPoints || p.projection || 0),
+        actualScore: Number(p.actualScore || 0)
       }));
     }
     
