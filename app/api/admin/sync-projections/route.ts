@@ -6,163 +6,131 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
   try {
-    // --- 0. SECURITY CHECK ---
-    const authHeader = request.headers.get('authorization');
     const { searchParams } = new URL(request.url);
     const secret = searchParams.get('secret');
-
-    // Allow if it's Vercel Cron OR if you manually provided the secret key
+    const authHeader = request.headers.get('authorization');
     const isCron = authHeader && authHeader.startsWith('Bearer cron_');
-    const isAdmin = secret === 'Touchdown2026'; 
-
-    if (!isCron && !isAdmin) {
+    
+    if (!isCron && secret !== 'Touchdown2026') {
        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // --- 1. GET CURRENT NFL CONTEXT ---
-    const today = new Date().toISOString().split('T')[0].replace(/-/g, '');
-    
-    // Override params for testing
-    const overrideWeek = searchParams.get('week');
-    const overrideSeason = searchParams.get('season');
+    // --- 1. CONFIGURATION (CORRECTED FOR 2026 REALITY) ---
+    // Current Date: Jan 2026
+    // Current Season: 2025
+    // Upcoming Round: Divisional (Week 20)
+    const targetSeason = searchParams.get('season') || '2025'; 
+    const targetWeek = searchParams.get('week') || '20';
 
-    let currentWeek = overrideWeek;
-    let currentSeason = overrideSeason;
-    let seasonType = 'reg'; 
+    console.log(`[Sync] 🚀 STARTING 2025 DIVISIONAL SYNC`);
+    console.log(`[Sync] Target: Week ${targetWeek}, Season ${targetSeason}`);
 
-    // If no override, ask the API what time it is
-    if (!currentWeek || !currentSeason) {
-        const infoUrl = `https://tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com/getNFLCurrentInfo?date=${today}`;
-        const infoResponse = await fetch(infoUrl, {
-          method: 'GET',
-          headers: {
-            'x-rapidapi-key': process.env.NEXT_PUBLIC_RAPIDAPI_KEY || '',
-            'x-rapidapi-host': 'tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com'
-          }
-        });
-        const infoData = await infoResponse.json();
-        const currentInfo = infoData.body;
-        
-        if (currentInfo) {
-            currentWeek = currentInfo.week;
-            currentSeason = currentInfo.season;
-            seasonType = currentInfo.seasonType;
-        }
-    }
-
-    // Fallbacks
-    if (!currentWeek) currentWeek = '1';
-    if (!currentSeason) currentSeason = '2025';
-
-    console.log(`[Sync] ⏱️ Target: Week ${currentWeek}, Season ${currentSeason}`);
-
-    // --- 2. DETERMINE DATABASE DESTINATION ---
-    let docId = '';
-    if (seasonType === 'post' || parseInt(currentWeek) > 18) {
-        // Playoff Logic: Week 19 -> 1, 20 -> 2, etc.
-        const playoffIndex = Math.max(1, parseInt(currentWeek) - 18); 
-        docId = `nfl_post_week_${playoffIndex}`;
-    } else {
-        // Regular Season
-        docId = `nfl_reg_week_${currentWeek}`;
-    }
-
-    console.log(`[Sync] 🎯 Saving to ${docId}`);
-
-    // --- 3. FETCH PROJECTIONS WITH YOUR CUSTOM SCORING ---
-    // These match the snippet you provided exactly
-    const scoringParams = [
-      'itemFormat=list',
-      'twoPointConversions=2',
-      'passYards=.04',
-      'passAttempts=-.5',
-      'passTD=4',
-      'passCompletions=1',
-      'passInterceptions=-2',
-      'pointsPerReception=1',
-      'carries=.2',
-      'rushYards=.1',
-      'rushTD=6',
-      'fumbles=-2',
-      'receivingYards=.1',
-      'receivingTD=6',
-      'targets=.1',
-      'fgMade=3',
-      'fgMissed=-1',
-      'xpMade=1',
-      'xpMissed=-1'
-    ].join('&');
-    
-    // Note: We use 'season' for flexibility, but your snippet used 'archiveSeason'. 
-    // Usually 'season' works for both current and past in Tank01.
-    const projUrl = `https://tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com/getNFLProjections?week=${currentWeek}&season=${currentSeason}&${scoringParams}`;
-    
-    console.log(`[Sync] 🔗 Fetching URL: ${projUrl}`);
-
-    const projResponse = await fetch(projUrl, {
-      method: 'GET',
-      headers: {
-        'x-rapidapi-key': process.env.NEXT_PUBLIC_RAPIDAPI_KEY || '', 
+    const headers = {
+        'x-rapidapi-key': process.env.NEXT_PUBLIC_RAPIDAPI_KEY || '',
         'x-rapidapi-host': 'tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com'
-      }
+    };
+
+    // --- 2. FETCH PROJECTIONS (Use 'season', not 'archiveSeason') ---
+    // We remove 'archiveSeason' because 2025 is the CURRENT active season.
+    const projParams = new URLSearchParams({
+        week: targetWeek,
+        season: targetSeason, // <--- CHANGED FROM archiveSeason
+        itemFormat: 'list',
+        twoPointConversions: '2', passYards: '.04', passAttempts: '-.5', passTD: '4',
+        passCompletions: '1', passInterceptions: '-2', pointsPerReception: '1',
+        carries: '.2', rushYards: '.1', rushTD: '6', fumbles: '-2',
+        receivingYards: '.1', receivingTD: '6', targets: '.1',
+        fgMade: '3', fgMissed: '-1', xpMade: '1', xpMissed: '-1'
     });
+    const projUrl = `https://tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com/getNFLProjections?${projParams.toString()}`;
 
-    const data = await projResponse.json();
-    const body = data.body || {};
+    // --- 3. FETCH GAMES SCHEDULE ---
+    const gamesUrl = `https://tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com/getNFLGamesForWeek?week=${targetWeek}&season=${targetSeason}`;
 
-    // --- 4. PROCESS PLAYERS & DEFENSES ---
+    console.log(`[Sync] 🔗 Fetching Projections: ${projUrl}`);
+
+    const [projRes, gamesRes] = await Promise.all([
+        fetch(projUrl, { method: 'GET', headers }),
+        fetch(gamesUrl, { method: 'GET', headers })
+    ]);
+
+    const projData = await projRes.json();
+    const gamesData = await gamesRes.json();
+
+    // --- 4. PROCESS DATA ---
+    const body = projData.body || {};
     let combinedList: any[] = [];
 
-    // A. Process Individual Players (QB, RB, WR, TE, K)
+    // Process Players
     if (Array.isArray(body.playerProjections)) {
         combinedList = [...body.playerProjections];
     }
 
-    // B. Process Defenses (DST)
-    // We map them to look like "Players" so the frontend handles them easily
+    // Process Defenses
     if (Array.isArray(body.teamDefenseProjections)) {
         const defenses = body.teamDefenseProjections.map((def: any) => ({
-            playerID: `DEF_${def.teamAbv}`, // Create a unique ID
-            longName: `${def.teamAbv} Defense`, // e.g. "NE Defense"
+            playerID: `DEF_${def.teamAbv}`,
+            longName: `${def.teamAbv} Defense`,
             team: def.teamAbv,
-            pos: 'DEF', // Normalized position name
-            fantasyPoints: def.fantasyPointsDefault || def.fantasyPoints || 0,
-            // Carry over raw stats if needed
-            sacks: def.sacks,
-            interceptions: def.interceptions,
-            defTD: def.defTD
+            pos: 'DEF',
+            fantasyPoints: def.fantasyPointsDefault || def.fantasyPoints || 0
         }));
-        
-        console.log(`[Sync] 🛡️ Found ${defenses.length} Defenses`);
         combinedList = [...combinedList, ...defenses];
     }
 
-    if (combinedList.length === 0) {
-       console.warn(`[Sync] ⚠️ Warning: API returned 0 players/defenses.`);
-       return NextResponse.json({ success: true, message: `Week ${currentWeek} has 0 projections.` });
+    // Process Schedule
+    let schedule: any[] = [];
+    const rawGames = gamesData.body || [];
+    if (Array.isArray(rawGames)) {
+        schedule = rawGames.map((g: any) => ({
+            id: g.gameID,
+            home: g.homeTeam,
+            away: g.awayTeam,
+            date: g.gameDate,
+            time: g.gameTime
+        }));
+    }
+
+    console.log(`[Sync] ✅ Found ${combinedList.length} players and ${schedule.length} games.`);
+
+    if (combinedList.length === 0 && schedule.length === 0) {
+        return NextResponse.json({ 
+            success: false, 
+            message: `No data found for Week ${targetWeek} Season ${targetSeason}. API might be updating.` 
+        });
     }
 
     // --- 5. SAVE TO FIREBASE ---
+    // Map Week 20 (Divisional) -> nfl_post_week_2
+    let docId = `nfl_reg_week_${targetWeek}`;
+    if (parseInt(targetWeek) > 18) {
+        const pIndex = parseInt(targetWeek) - 18;
+        docId = `nfl_post_week_${pIndex}`;
+    }
+
+    // For testing: If you want to see this data in your "Wildcard" tab, keep this override.
+    // Otherwise, remove it to save to the correct Divisional bucket.
+    if (searchParams.get('round') === 'wildcard') {
+        docId = 'nfl_post_week_1';
+    }
+
     const docRef = doc(db, 'system_cache', docId);
     await setDoc(docRef, {
         lastUpdated: new Date().toISOString(),
-        payload: {
-            players: combinedList // Now contains Players AND Defenses
+        payload: { 
+            players: combinedList,
+            games: schedule 
         },
-        meta: {
-            season: currentSeason,
-            week: currentWeek,
-            type: seasonType
-        }
+        meta: { week: targetWeek, season: targetSeason }
     });
 
     return NextResponse.json({ 
         success: true, 
-        message: `Synced ${combinedList.length} items (Players + Defenses) to ${docId}`,
+        message: `Synced ${combinedList.length} players and ${schedule.length} games to ${docId} (Season ${targetSeason})`
     });
 
   } catch (error: any) {
-    console.error(`[Sync] 🔥 ERROR:`, error);
+    console.error("[Sync] 🔥 ERROR:", error);
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 }

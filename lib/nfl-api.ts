@@ -1,7 +1,6 @@
 ﻿import { doc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 
-// 1. DEFINE THE INTERFACE
 export interface NFLPlayer {
   id: string;
   name: string;
@@ -12,7 +11,14 @@ export interface NFLPlayer {
   actualScore?: number;
 }
 
-// 2. HELPER: Map rounds to Firestore Doc IDs
+export interface NFLGame {
+  id: string;
+  home: string;
+  away: string;
+  date: string;
+  time: string;
+}
+
 function getDocId(roundOrWeek: string) {
   const playoffMap: Record<string, string> = {
     'wildcard': 'nfl_post_week_1',
@@ -20,15 +26,12 @@ function getDocId(roundOrWeek: string) {
     'conference': 'nfl_post_week_3',
     'superbowl': 'nfl_post_week_4'
   };
-
-  if (playoffMap[roundOrWeek]) {
-    return playoffMap[roundOrWeek];
-  }
+  if (playoffMap[roundOrWeek]) return playoffMap[roundOrWeek];
   return `nfl_reg_week_${roundOrWeek}`;
 }
 
-// 3. MAIN FUNCTION
-export async function getNFLPlayers(roundOrWeek: string = 'wildcard'): Promise<NFLPlayer[]> {
+// FIX: Return Type now includes Games
+export async function getNFLPlayers(roundOrWeek: string = 'wildcard'): Promise<{ players: NFLPlayer[], games: NFLGame[] }> {
   const docId = getDocId(roundOrWeek);
   
   try {
@@ -38,42 +41,36 @@ export async function getNFLPlayers(roundOrWeek: string = 'wildcard'): Promise<N
     if (docSnap.exists()) {
       const data = docSnap.data();
       
-      // --- CRITICAL FIX: CHECK ALL POSSIBLE PATHS ---
-      // Your screenshot shows the data is inside "payload.players"
-      const rawPlayers = 
-        data.payload?.players ||  // Check inside payload folder (NEW)
-        data.projections ||       // Check root level
-        data.playerProjections || // Check legacy name
-        [];
-      
-      console.log(`[API] ✅ Loading ${rawPlayers.length} players from ${docId}`);
-
-      // 4. MAP DATA TO MATCH YOUR PAGE INTERFACE
-      return rawPlayers.map((p: any) => ({
-        // Handle both ID formats
+      // 1. Get Players
+      const rawPlayers = data.payload?.players || data.projections || [];
+      const players = rawPlayers.map((p: any) => ({
         id: p.id || p.playerID, 
-        
-        // Handle name formats
         name: p.name || p.longName || 'Unknown',
-        
-        // Handle Team/Pos
         team: p.team || 'FA',
         position: p.position || p.pos || 'FLEX',
-        
-        // Handle Opponent (Tank01 often sends 'opponent' or 'gameOpponent')
         opponent: p.opponent || p.gameOpponent || 'BYE', 
-        
-        // Handle Scores (projectedPoints vs fantasyPoints)
         projection: Number(p.projectedPoints || p.fantasyPoints || p.projection || 0),
         actualScore: Number(p.actualScore || 0)
       }));
+
+      // 2. Get Games (New)
+      const rawGames = data.payload?.games || [];
+      const games = rawGames.map((g: any) => ({
+        id: g.id || g.gameID,
+        home: g.home || g.homeTeam,
+        away: g.away || g.awayTeam,
+        date: g.date || g.gameDate,
+        time: g.time || g.gameTime
+      }));
+      
+      console.log(`[API] ✅ Loaded ${players.length} players and ${games.length} games from ${docId}`);
+      return { players, games };
     }
     
-    console.warn(`[API] ⚠️ Cache empty for ${docId}`);
-    return [];
+    return { players: [], games: [] };
 
   } catch (error) {
     console.error(`[API] ❌ Firestore Read Error:`, error);
-    return [];
+    return { players: [], games: [] };
   }
 }
