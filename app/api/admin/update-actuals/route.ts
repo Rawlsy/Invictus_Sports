@@ -18,7 +18,7 @@ export async function GET(request: Request) {
 
     // --- 1. CONFIGURATION ---
     const targetSeason = searchParams.get('season') || '2025'; 
-    const targetWeek = searchParams.get('week') || '20'; // Default to Divisional
+    const targetWeek = searchParams.get('week') || '20'; // Default to Divisional (Week 20)
     
     // Map Week Number to Database Field Name
     const roundMap: Record<string, string> = {
@@ -37,8 +37,7 @@ export async function GET(request: Request) {
     };
 
     // --- 2. GET LIST OF GAME IDs FOR THE WEEK ---
-    // We need to know which games happened so we can ask for their box scores
-    const scheduleUrl = `https://tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com/getNFLGamesForWeek?week=${targetWeek}&season=${targetSeason}`;
+    const scheduleUrl = `https://tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com/getNFLGamesForWeek?week=${targetWeek}&season=${targetSeason}&seasonType=post`; // Ensure seasonType=post for playoffs
     const schedRes = await fetch(scheduleUrl, { headers });
     const schedData = await schedRes.json();
     const games = schedData.body || [];
@@ -52,23 +51,23 @@ export async function GET(request: Request) {
     // --- 3. LOOP GAMES & FETCH BOX SCORES ---
     let updatedCount = 0;
     
-    // Firestore batches are limited to 500 writes. We'll create a new batch if needed.
-    // For simplicity here, we assume one batch is enough for a playoff week (<500 players active).
-    const batch = writeBatch(db);
+    // Firestore batches are limited to 500 writes. 
+    // We'll commit and recreate the batch if we approach the limit.
+    let batch = writeBatch(db);
+    let batchOpCount = 0;
 
-    // Your Exact Scoring Settings from the snippet
-    // Note: I swapped 'gameID=...' for the variable
+    // Your Exact Scoring Settings
     const scoringParams = new URLSearchParams({
         playByPlay: 'false',
-        fantasyPoints: 'true', // <--- IMPORTANT: Tells API to calculate it
+        fantasyPoints: 'true', // Required to get the API to calc points
         twoPointConversions: '2',
         passYards: '.04',
         passAttempts: '0',
         passTD: '4',
         passCompletions: '0',
         passInterceptions: '-2',
-        pointsPerReception: '.5', // Note: Your snippet had .5 here (Half PPR)
-        carries: '.2',
+        pointsPerReception: '0.5', // Half PPR per your snippet
+        carries: '.2',             // 0.2 points per carry? (Uncommon but kept per snippet)
         rushYards: '.1',
         rushTD: '6',
         fumbles: '-2',
@@ -77,10 +76,10 @@ export async function GET(request: Request) {
         targets: '0',
         defTD: '6',
         fgMade: '3',
-        fgMissed: '-3', // Harsh penalty!
+        fgMissed: '-3', // Harsh penalty
         xpMade: '1',
         xpMissed: '-1',
-        // IDP Settings (included in your snippet)
+        // IDP Settings
         idpTotalTackles: '0',
         idpSoloTackles: '0',
         idpTFL: '0',
@@ -93,7 +92,10 @@ export async function GET(request: Request) {
 
     for (const game of games) {
         const gameID = game.gameID;
-        // Construct the URL dynamically
+        
+        // Skip games that haven't started (optional optimization)
+        // if (game.gameStatus === 'Scheduled') continue;
+
         const boxUrl = `https://tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com/getNFLBoxScore?gameID=${gameID}&${scoringParams.toString()}`;
         
         console.log(`[Score Sync] Fetching Box Score: ${game.awayTeam} @ ${game.homeTeam}`);
@@ -106,21 +108,17 @@ export async function GET(request: Request) {
         for (const pid of Object.keys(playerStats)) {
             const pData = playerStats[pid];
             
-            // The API calculates 'fantasyPoints' because we sent fantasyPoints=true
-            // Sometimes it returns as a string, so we force Number()
+            // The API calculates 'fantasyPoints' based on params above
+            // Force Number() to ensure math works later
             const actualScore = Number(pData.fantasyPoints || 0);
 
-            // Only update if they played/scored
+            // Only update if we have a valid player object
             if (pData) {
                 const playerRef = doc(db, 'players', pid);
                 
-                // Update specifically the score for this round
-                // We use dot notation so we don't erase the 'projected' value
-                batch.update(playerRef, {
-                    [`weeks.${roundName}.score`]: actualScore
-                }); // Note: .update() will fail if player doc doesn't exist. .set({ ... }, {merge: true}) is safer if uncertain.
-                
-                // Switch to set/merge just in case a new player appeared who wasn't projected
+                // Use setDoc with merge: true. 
+                // This creates the doc if missing, or updates just the specific fields if it exists.
+                // It safely updates `weeks.divisional.score` without deleting `weeks.divisional.projected`.
                 batch.set(playerRef, {
                      weeks: {
                         [roundName]: {
@@ -130,14 +128,22 @@ export async function GET(request: Request) {
                 }, { merge: true });
 
                 updatedCount++;
+                batchOpCount++;
+
+                // Commit and reset batch if full (Limit is 500)
+                if (batchOpCount >= 400) {
+                    await batch.commit();
+                    batch = writeBatch(db);
+                    batchOpCount = 0;
+                }
             }
         }
     }
 
-    // --- 4. SAVE TO DB ---
-    if (updatedCount > 0) {
+    // --- 4. COMMIT REMAINING WRITES ---
+    if (batchOpCount > 0) {
         await batch.commit();
-        console.log(`[Score Sync] ✅ Successfully updated ${updatedCount} player scores.`);
+        console.log(`[Score Sync] ✅ Successfully committed final batch.`);
     }
 
     return NextResponse.json({ 

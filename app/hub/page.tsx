@@ -3,41 +3,59 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link'; 
-import { 
-  onAuthStateChanged, 
-  signOut, 
-  User 
-} from 'firebase/auth';
+import { onAuthStateChanged, User } from 'firebase/auth';
 import { 
   collection, 
   addDoc, 
+  setDoc, 
   query, 
   where, 
   getDocs, 
   updateDoc,
   doc,
-  getDoc, 
   arrayUnion,
   serverTimestamp 
 } from 'firebase/firestore'; 
 import { auth, db } from '@/lib/firebase'; 
 
-// --- 1. CREATE LEAGUE MODAL ---
+// --- INTERFACES ---
+interface League {
+  id: string;
+  name: string;
+  type: 'standard' | 'custom';
+  privacy: 'public' | 'private';
+  members: string[]; 
+  ownerId: string;
+  password?: string;
+  ownerName?: string;
+  settings?: {
+    ppr?: boolean;
+    scoringType?: 'PPR' | 'Half-PPR' | 'Standard Scoring';
+  };
+}
+
 interface CreateLeagueModalProps {
   onClose: () => void;
   user: User;
 }
 
+interface LeagueJoinModalProps {
+  league: League;
+  user: User;
+  onClose: () => void;
+}
+
+// --- 1. CREATE LEAGUE MODAL ---
 const CreateLeagueModal = ({ onClose, user }: CreateLeagueModalProps) => {
   const router = useRouter();
-  const [leagueType, setLeagueType] = useState<'standard' | 'custom' | null>('standard'); 
+  const [leagueType, setLeagueType] = useState<'standard' | 'custom'>('standard'); 
   const [leagueName, setLeagueName] = useState('');
   const [isPrivate, setIsPrivate] = useState(false);
   const [password, setPassword] = useState('');
   const [isCreating, setIsCreating] = useState(false);
 
   const handleContinue = async () => {
-    if (!leagueType || !leagueName.trim()) return;
+    if (!leagueName.trim()) return;
     if (isPrivate && !password.trim()) return; 
 
     setIsCreating(true);
@@ -45,7 +63,7 @@ const CreateLeagueModal = ({ onClose, user }: CreateLeagueModalProps) => {
     try {
       const ownerDisplayName = user.displayName || user.email?.split('@')[0] || 'Commissioner';
 
-      const docRef = await addDoc(collection(db, "leagues"), {
+      const leagueRef = await addDoc(collection(db, "leagues"), {
         name: leagueName,
         type: leagueType,
         ownerId: user.uid,
@@ -54,10 +72,21 @@ const CreateLeagueModal = ({ onClose, user }: CreateLeagueModalProps) => {
         password: isPrivate ? password : null, 
         createdAt: serverTimestamp(),
         members: [user.uid], 
-        settings: leagueType === 'standard' ? { ppr: true, teams: 10 } : {},
+        settings: { ppr: true, scoringType: 'PPR' },
       });
 
-      router.push(`/league/${docRef.id}`);
+      const memberRef = doc(db, "leagues", leagueRef.id, "Members", user.uid);
+      await setDoc(memberRef, {
+        UserID: user.uid,
+        username: ownerDisplayName,
+        joinedAt: serverTimestamp(),
+        "Wild Card Lineup": {},
+        "Divisional Lineup": {},
+        "Conference Lineup": {},
+        "Super Bowl Lineup": {}
+      });
+
+      router.push(`/league/${leagueRef.id}`);
     } catch (error) {
       console.error("Error creating league: ", error);
       alert("Failed to create league.");
@@ -69,19 +98,19 @@ const CreateLeagueModal = ({ onClose, user }: CreateLeagueModalProps) => {
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <div className="bg-gray-800 rounded-xl shadow-2xl max-w-2xl w-full overflow-hidden border border-gray-700">
         <div className="bg-gray-900/50 px-6 py-4 border-b border-gray-700 flex justify-between items-center">
-          <h3 className="text-xl font-bold text-white">Create a New League</h3>
+          <h3 className="text-xl font-bold text-white uppercase tracking-tighter">Create a New League</h3>
           <button onClick={onClose} className="text-gray-400 hover:text-white transition">✕</button>
         </div>
 
         <div className="p-8 space-y-6">
           <div>
-            <label className="block text-sm font-bold text-gray-400 mb-2">League Name</label>
+            <label className="block text-xs font-black text-gray-500 uppercase tracking-widest mb-2">League Name</label>
             <input 
               type="text" 
               placeholder="e.g. The Sunday Showdown"
               value={leagueName}
               onChange={(e) => setLeagueName(e.target.value)}
-              className="w-full p-3 bg-gray-900 border border-gray-700 rounded-lg focus:ring-2 focus:ring-green-500 outline-none text-white placeholder-gray-600"
+              className="w-full p-3 bg-gray-900 border border-gray-700 rounded-lg focus:ring-2 focus:ring-green-500 outline-none text-white placeholder-gray-600 font-bold"
             />
           </div>
           
@@ -91,9 +120,9 @@ const CreateLeagueModal = ({ onClose, user }: CreateLeagueModalProps) => {
                 type="checkbox" 
                 checked={isPrivate}
                 onChange={(e) => setIsPrivate(e.target.checked)}
-                className="h-5 w-5 text-green-500 bg-gray-900 border-gray-600 rounded focus:ring-green-500 focus:ring-offset-gray-900 accent-green-500"
+                className="h-5 w-5 text-green-500 bg-gray-900 border-gray-600 rounded focus:ring-green-500 accent-green-500"
               />
-              <span className="font-bold text-gray-300">Make this league Private?</span>
+              <span className="font-black text-xs uppercase tracking-widest text-gray-300">Make this league Private?</span>
             </label>
             {isPrivate && (
               <div className="ml-8 mt-2">
@@ -102,47 +131,44 @@ const CreateLeagueModal = ({ onClose, user }: CreateLeagueModalProps) => {
                   placeholder="Set a League Password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full p-2 bg-gray-800 border border-gray-600 rounded focus:ring-2 focus:ring-green-500 outline-none text-white"
+                  className="w-full p-2 bg-gray-800 border border-gray-600 rounded focus:ring-2 focus:ring-green-500 outline-none text-white font-bold"
                 />
               </div>
             )}
           </div>
 
           <div>
-            <h4 className="text-gray-400 mb-4 font-medium">Select Format:</h4>
+            <h4 className="text-xs font-black uppercase tracking-widest text-gray-500 mb-4">Select Format:</h4>
             <div className="grid grid-cols-2 gap-6">
-              {/* STANDARD OPTION */}
               <div 
                 onClick={() => setLeagueType('standard')}
                 className={`cursor-pointer border-2 rounded-xl p-6 transition-all ${
                   leagueType === 'standard' 
-                    ? 'border-green-500 bg-green-500/10' 
+                    ? 'border-green-500 bg-green-500/10 shadow-[0_0_15px_rgba(34,197,94,0.1)]' 
                     : 'border-gray-700 bg-gray-800 hover:border-gray-600'
                 }`}
               >
-                <h5 className="font-bold text-white">Standard</h5>
-                <p className="text-xs text-gray-500 mt-1">Default scoring & rosters</p>
+                <h5 className="font-black text-white uppercase tracking-tight">Standard</h5>
+                <p className="text-[10px] font-bold text-gray-500 mt-1 uppercase">Default scoring & rosters</p>
               </div>
-
-              {/* CUSTOM OPTION (DISABLED) */}
               <div 
                 className="cursor-not-allowed border-2 border-gray-700 bg-gray-800/50 rounded-xl p-6 opacity-60"
               >
                 <div className="flex justify-between items-start">
-                  <h5 className="font-bold text-gray-400">Custom</h5>
-                  <span className="text-[10px] font-bold bg-gray-700 text-gray-300 px-1.5 py-0.5 rounded">SOON</span>
+                  <h5 className="font-black text-gray-400 uppercase tracking-tight">Custom</h5>
+                  <span className="text-[8px] font-black bg-gray-700 text-gray-300 px-1.5 py-0.5 rounded uppercase">Soon</span>
                 </div>
-                 <p className="text-xs text-gray-500 mt-1">Full control</p>
+                 <p className="text-[10px] font-bold text-gray-500 mt-1 uppercase tracking-tighter">Full control</p>
               </div>
             </div>
           </div>
         </div>
 
         <div className="px-6 py-4 bg-gray-900/50 border-t border-gray-700 flex justify-end space-x-3">
-          <button onClick={onClose} className="px-5 py-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg font-medium transition-colors">Cancel</button>
+          <button onClick={onClose} className="px-5 py-2 text-xs font-black uppercase tracking-widest text-gray-500 hover:text-white transition-colors">Cancel</button>
           <button 
             onClick={handleContinue}
-            className="px-6 py-2 bg-green-500 text-black rounded-lg font-bold hover:bg-green-400 transition-colors shadow-lg shadow-green-500/20"
+            className="px-6 py-2 bg-green-500 text-black rounded-lg font-black uppercase tracking-widest hover:bg-green-400 transition-colors shadow-lg shadow-green-500/20"
           >
             {isCreating ? 'Creating...' : 'Create League'}
           </button>
@@ -152,13 +178,7 @@ const CreateLeagueModal = ({ onClose, user }: CreateLeagueModalProps) => {
   );
 };
 
-// --- 2. LEAGUE PREVIEW / JOIN MODAL ---
-interface LeagueJoinModalProps {
-  league: any;
-  user: User;
-  onClose: () => void;
-}
-
+// --- 2. JOIN LEAGUE MODAL ---
 const LeagueJoinModal = ({ league, user, onClose }: LeagueJoinModalProps) => {
   const router = useRouter();
   const [password, setPassword] = useState('');
@@ -186,6 +206,17 @@ const LeagueJoinModal = ({ league, user, onClose }: LeagueJoinModalProps) => {
         members: arrayUnion(user.uid)
       });
 
+      const memberRef = doc(db, "leagues", league.id, "Members", user.uid);
+      await setDoc(memberRef, {
+        UserID: user.uid,
+        username: user.displayName || 'Member',
+        joinedAt: serverTimestamp(),
+        "Wild Card Lineup": {},
+        "Divisional Lineup": {},
+        "Conference Lineup": {},
+        "Super Bowl Lineup": {}
+      }, { merge: true });
+
       router.push(`/league/${league.id}`);
 
     } catch (err) {
@@ -198,60 +229,46 @@ const LeagueJoinModal = ({ league, user, onClose }: LeagueJoinModalProps) => {
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <div className="bg-gray-800 rounded-xl shadow-2xl max-w-md w-full overflow-hidden border border-gray-600">
-        
-        {/* Header */}
         <div className="bg-gray-900/50 px-6 py-4 border-b border-gray-700 flex justify-between items-center">
-          <h3 className="text-xl font-bold text-white">Join League</h3>
+          <h3 className="text-xl font-black text-white uppercase tracking-tighter">Join League</h3>
           <button onClick={onClose} className="text-gray-400 hover:text-white transition">✕</button>
         </div>
 
         <div className="p-6 space-y-4">
-          {/* League Details */}
           <div className="text-center space-y-2 mb-6">
-            <h2 className="text-2xl font-black text-white">{league.name}</h2>
-            <div className="inline-flex items-center space-x-2 text-sm text-gray-400">
-              <span className={`px-2 py-0.5 rounded border ${league.type === 'custom' ? 'border-purple-500/30 bg-purple-500/10 text-purple-400' : 'border-blue-500/30 bg-blue-500/10 text-blue-400'}`}>
-                {league.type === 'custom' ? 'Custom' : 'Standard'}
-              </span>
-              <span>•</span>
-              <span>{league.members?.length || 0} Members</span>
-            </div>
-            
-            <p className="text-sm text-gray-400 pt-2">
-              Commissioner: <span className="font-bold text-white">{displayOwner}</span>
+            <h2 className="text-2xl font-black text-white uppercase tracking-tight">{league.name}</h2>
+            <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">
+              Commissioner: <span className="text-white">{displayOwner}</span>
             </p>
           </div>
 
-          {/* Password Input (Only if Private) */}
           {isPrivate && (
             <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
-              <label className="block text-sm font-bold text-gray-300 mb-2 flex items-center">
-                <svg className="w-4 h-4 mr-1 text-yellow-400" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" /></svg>
-                This league is private
+              <label className="block text-xs font-black text-gray-400 uppercase tracking-widest mb-2 flex items-center">
+                Private League
               </label>
               <input 
                 type="password"
                 placeholder="Enter League Password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full p-2 bg-gray-800 border border-gray-600 rounded focus:ring-2 focus:ring-green-500 outline-none text-white"
+                className="w-full p-2 bg-gray-800 border border-gray-600 rounded focus:ring-2 focus:ring-green-500 outline-none text-white font-bold"
               />
             </div>
           )}
 
-          {error && <p className="text-red-400 text-sm text-center font-bold">{error}</p>}
+          {error && <p className="text-red-400 text-[10px] text-center font-black uppercase tracking-widest">{error}</p>}
         </div>
 
-        {/* Footer Actions */}
         <div className="px-6 py-4 bg-gray-900/50 border-t border-gray-700 flex flex-col gap-3">
           <button 
             onClick={handleConfirmJoin}
             disabled={isJoining || (isPrivate && !password)}
-            className="w-full py-3 bg-green-500 text-black rounded-lg font-bold hover:bg-green-400 transition-colors shadow-lg shadow-green-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full py-3 bg-green-500 text-black rounded-lg font-black uppercase tracking-widest hover:bg-green-400 transition-all shadow-lg shadow-green-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isJoining ? 'Joining...' : 'Join League'}
           </button>
-          <button onClick={onClose} className="text-sm text-gray-500 hover:text-gray-300">
+          <button onClick={onClose} className="text-[10px] font-black uppercase tracking-widest text-gray-500 hover:text-gray-300 transition-colors">
             Cancel
           </button>
         </div>
@@ -260,273 +277,163 @@ const LeagueJoinModal = ({ league, user, onClose }: LeagueJoinModalProps) => {
   );
 };
 
-// --- 3. JOIN LEAGUE TAB (MAIN) ---
-const JoinLeague = ({ user }: { user: User }) => {
-  const [inviteCode, setInviteCode] = useState('');
-  const [isSearching, setIsSearching] = useState(false);
-  const [searchError, setSearchError] = useState('');
-  const [foundLeague, setFoundLeague] = useState<any | null>(null);
-
-  const handleFindLeague = async () => {
-    if (!inviteCode.trim()) return;
-    setIsSearching(true);
-    setSearchError('');
-    setFoundLeague(null);
-
-    try {
-      const leagueRef = doc(db, "leagues", inviteCode.trim());
-      const leagueSnap = await getDoc(leagueRef);
-
-      if (!leagueSnap.exists()) {
-        setSearchError("League not found. Check the code.");
-        setIsSearching(false);
-        return;
-      }
-
-      const leagueData = { id: leagueSnap.id, ...leagueSnap.data() };
-      setFoundLeague(leagueData); 
-      setIsSearching(false);
-
-    } catch (error) {
-      console.error("Error finding league:", error);
-      setSearchError("An error occurred while searching.");
-      setIsSearching(false);
-    }
-  };
-
-  return (
-    <div className="space-y-8 mt-6">
-      
-      {/* SECTION A: FIND LEAGUE */}
-      <div className="bg-gray-800 p-6 rounded-lg shadow-md border border-gray-700">
-        <h2 className="text-xl font-bold text-white mb-4 flex items-center">
-          <svg className="w-5 h-5 mr-2 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
-          Find a League
-        </h2>
-        <p className="text-gray-400 text-sm mb-4">Enter a League Code (ID) to view details and join.</p>
-        
-        <div className="flex gap-4">
-          <input 
-            type="text" 
-            placeholder="Paste League Code here..." 
-            value={inviteCode}
-            onChange={(e) => setInviteCode(e.target.value)}
-            className="flex-1 p-3 bg-gray-900 border border-gray-600 rounded-lg text-white focus:ring-2 focus:ring-green-500 outline-none placeholder-gray-600"
-          />
-          <button 
-            onClick={handleFindLeague}
-            disabled={isSearching || !inviteCode}
-            className="px-6 py-3 bg-green-500 hover:bg-green-400 text-black font-bold rounded-lg transition-colors shadow-lg shadow-green-500/20 disabled:opacity-50"
-          >
-            {isSearching ? '...' : 'Find'}
-          </button>
-        </div>
-        {searchError && (
-          <p className="text-red-400 text-sm mt-3 font-medium">⚠️ {searchError}</p>
-        )}
-      </div>
-
-      {/* SECTION B: BROWSE PUBLIC LEAGUES (PLACEHOLDER) */}
-      <div className="bg-gray-800 p-6 rounded-lg shadow-md border border-gray-700">
-        <h2 className="text-xl font-bold text-white mb-6 flex items-center">
-          <svg className="w-5 h-5 mr-2 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" /></svg>
-          Browse Public Leagues
-        </h2>
-        <div className="py-8 text-center border-2 border-dashed border-gray-700 rounded-xl">
-           <p className="text-gray-500 italic text-lg">Coming soon...</p>
-        </div>
-      </div>
-
-      {/* POPUP: LEAGUE JOIN MODAL */}
-      {foundLeague && (
-        <LeagueJoinModal 
-          league={foundLeague} 
-          user={user} 
-          onClose={() => setFoundLeague(null)} 
-        />
-      )}
-    </div>
-  );
-};
-
-// --- 4. MY LEAGUES TAB ---
-const MyLeagues = ({ user }: { user: User }) => {
-  const router = useRouter();
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [leagues, setLeagues] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const fetchLeagues = async () => {
-      try {
-        const q = query(
-          collection(db, "leagues"), 
-          where("members", "array-contains", user.uid)
-        );
-        const querySnapshot = await getDocs(q);
-        const leaguesData = querySnapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        }));
-        setLeagues(leaguesData);
-      } catch (error) {
-        console.error("Error fetching leagues:", error);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchLeagues();
-  }, [user.uid]);
-
-  const handleShare = (e: React.MouseEvent, leagueId: string) => {
-    e.stopPropagation(); 
-    navigator.clipboard.writeText(leagueId); 
-    alert(`League Code copied to clipboard: ${leagueId}`);
-  };
-
-  return (
-    <>
-      <div className="bg-gray-800 p-6 rounded-lg shadow-md border border-gray-700 mt-6">
-        <div className="flex justify-between items-center mb-6">
-          <h2 className="text-2xl font-bold text-white">My Leagues</h2>
-          <button 
-            onClick={() => setShowCreateModal(true)}
-            className="bg-green-500 text-black px-4 py-2 rounded-lg text-sm font-bold hover:bg-green-400 transition-colors shadow-lg shadow-green-500/20"
-          >
-            + Create League
-          </button>
-        </div>
-        
-        {loading ? (
-          <div className="text-gray-400 italic">Loading leagues...</div>
-        ) : leagues.length === 0 ? (
-          <div className="text-gray-500 py-8 text-center border-2 border-dashed border-gray-700 rounded-xl">
-            You aren't in any leagues yet.
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {leagues.map((league) => (
-              <div 
-                key={league.id}
-                onClick={() => router.push(`/league/${league.id}`)}
-                className="relative cursor-pointer border border-gray-700 rounded-lg p-5 hover:shadow-lg hover:border-green-400/50 hover:bg-gray-750 transition-all bg-gray-900 group"
-              >
-                <div className="flex justify-between items-start">
-                   <h3 className="font-bold text-white text-lg group-hover:text-green-400 transition-colors pr-6">{league.name}</h3>
-                   <span className="text-xs bg-gray-800 text-gray-400 px-2 py-1 rounded border border-gray-700">
-                      {league.type === 'custom' ? 'Custom' : 'PPR Scoring'}
-                   </span>
-                </div>
-                
-                <div className="flex justify-between items-end mt-4">
-                  <span className="text-xs text-gray-500">{league.members?.length || 1} Members</span>
-                  
-                  <button 
-                    onClick={(e) => handleShare(e, league.id)}
-                    className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-full transition-colors z-10"
-                    title="Copy League Code"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" /></svg>
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-      {showCreateModal && <CreateLeagueModal user={user} onClose={() => setShowCreateModal(false)} />}
-    </>
-  );
-};
-
-// --- 5. MAIN DASHBOARD PAGE ---
-export default function DashboardPage() {
+// --- 3. MAIN HUB PAGE COMPONENT ---
+export default function HubPage() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'leagues' | 'join'>('leagues');
+  
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [joiningLeague, setJoiningLeague] = useState<League | null>(null);
+
+  const [myLeagues, setMyLeagues] = useState<League[]>([]);
+  const [publicLeagues, setPublicLeagues] = useState<League[]>([]);
+  const [activeTab, setActiveTab] = useState<'my-leagues' | 'join'>('my-leagues');
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      if (!currentUser) {
-        router.push('/login');
-      } else {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      if (currentUser) {
         setUser(currentUser);
-        setLoading(false);
+        await fetchLeagues(currentUser.uid);
+      } else {
+        router.push('/login');
       }
+      setLoading(false);
     });
     return () => unsubscribe();
   }, [router]);
 
-  const handleSignOut = async () => {
-    await signOut(auth);
-    router.push('/login');
+  const fetchLeagues = async (uid: string) => {
+    try {
+      const myLeaguesQuery = query(collection(db, "leagues"), where("members", "array-contains", uid));
+      const mySnapshot = await getDocs(myLeaguesQuery);
+      const myLeaguesData = mySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as League));
+      setMyLeagues(myLeaguesData);
+
+      const publicQuery = query(collection(db, "leagues"), where("privacy", "==", "public"));
+      const publicSnapshot = await getDocs(publicQuery);
+      const allPublic = publicSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as League));
+      
+      setPublicLeagues(allPublic.filter(l => !l.members.includes(uid)));
+
+    } catch (error) {
+      console.error("Error fetching leagues:", error);
+    }
   };
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center bg-gray-900 text-white">Loading...</div>;
-  if (!user) return null;
+  if (loading) return <div className="min-h-screen bg-gray-950 text-white flex items-center justify-center font-black uppercase tracking-[0.2em] text-xs">Loading Hub...</div>;
 
   return (
-    <div className="min-h-screen bg-gray-900 flex flex-col font-sans text-white">
-       {/* Page Header */}
-       <header className="bg-gray-800 border-b border-gray-700 shadow-sm">
-          <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex justify-between items-center h-16">
-              
-              {/* Left: Home Link */}
-              <div className="flex items-center">
-                <Link href="/" className="text-sm font-medium text-gray-400 hover:text-green-400 transition-colors flex items-center gap-2">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-                  </svg>
-                  Home
-                </Link>
-              </div>
-
-              {/* Right: User Info */}
-              <div className="flex items-center space-x-4">
-                <span className="text-sm text-gray-400">Hello, <span className="text-white font-bold">{user.displayName || user.email}</span></span>
-                <button 
-                  onClick={handleSignOut} 
-                  className="text-xs text-red-400 font-medium border border-red-900/50 bg-red-900/10 hover:bg-red-900/30 px-4 py-2 rounded-full transition-colors"
-                >
-                  Sign Out
-                </button>
-              </div>
-            </div>
-          </div>
-       </header>
-
-       <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          {/* Navigation Tabs */}
-          <div className="flex border-b border-gray-700 mb-6">
-            <button 
-              onClick={() => setActiveTab('leagues')} 
-              className={`pb-4 px-6 text-sm font-medium transition-colors ${
-                activeTab === 'leagues' 
-                  ? 'text-green-400 border-b-2 border-green-400' 
-                  : 'text-gray-500 hover:text-gray-300'
+    <div className="min-h-screen bg-gray-950 text-white">
+      {/* HEADER REMOVED: Navigation handled by Global Navbar in layout.tsx */}
+      
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-10 gap-6">
+          <div className="flex space-x-1 bg-gray-900 p-1 rounded-xl border border-gray-800">
+            <button
+              onClick={() => setActiveTab('my-leagues')}
+              className={`px-6 py-2.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${
+                activeTab === 'my-leagues' ? 'bg-gray-800 text-green-400 shadow-xl border border-gray-700' : 'text-gray-500 hover:text-white'
               }`}
             >
               My Leagues
             </button>
-            <button 
-              onClick={() => setActiveTab('join')} 
-              className={`pb-4 px-6 text-sm font-medium transition-colors ${
-                activeTab === 'join' 
-                  ? 'text-green-400 border-b-2 border-green-400' 
-                  : 'text-gray-500 hover:text-gray-300'
+            <button
+              onClick={() => setActiveTab('join')}
+              className={`px-6 py-2.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${
+                activeTab === 'join' ? 'bg-gray-800 text-green-400 shadow-xl border border-gray-700' : 'text-gray-500 hover:text-white'
               }`}
             >
-              Join a League
+              Find Leagues
             </button>
           </div>
 
-          <div>
-            {activeTab === 'leagues' && <MyLeagues user={user} />}
-            {activeTab === 'join' && <JoinLeague user={user} />}
+          <button 
+            onClick={() => setShowCreateModal(true)}
+            className="flex items-center space-x-2 bg-green-500 hover:bg-green-400 text-black px-6 py-3 rounded-xl font-black uppercase tracking-widest transition-all shadow-lg shadow-green-500/20 active:scale-95"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd" />
+            </svg>
+            <span>Create League</span>
+          </button>
+        </div>
+
+        {activeTab === 'my-leagues' && (
+          <div className="space-y-6">
+            {myLeagues.length === 0 ? (
+              <div className="text-center py-24 bg-gray-900/50 rounded-3xl border-2 border-dashed border-gray-800 flex flex-col items-center">
+                <div className="text-gray-600 text-xs font-black uppercase tracking-widest mb-6">No active leagues found.</div>
+                <button 
+                  onClick={() => setShowCreateModal(true)}
+                  className="text-green-500 hover:text-green-400 font-black uppercase tracking-widest text-[10px] border border-green-500/20 px-4 py-2 rounded-lg bg-green-500/5 transition-all"
+                >
+                  Initiate New League
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                {myLeagues.map(league => {
+                  const scoringFormat = league.settings?.scoringType || (league.settings?.ppr ? 'PPR' : 'Standard Scoring');
+
+                  return (
+                    <Link href={`/league/${league.id}`} key={league.id} className="group">
+                      <div className="bg-gray-900 rounded-2xl p-8 border border-gray-800 group-hover:border-green-500/50 group-hover:shadow-[0_0_30px_rgba(34,197,94,0.05)] transition-all duration-500 h-full flex flex-col relative overflow-hidden">
+                        <div className="absolute top-0 left-0 w-1 h-full bg-green-500 transform -translate-x-full group-hover:translate-x-0 transition-transform duration-500" />
+                        <div className="flex flex-wrap gap-2 mb-6">
+                          <span className="px-2.5 py-1 text-[8px] font-black uppercase rounded tracking-[0.15em] bg-green-500/10 text-green-400 border border-green-500/20">
+                            {scoringFormat}
+                          </span>
+                        </div>
+                        <h3 className="text-xl font-black text-white mb-2 uppercase tracking-tight group-hover:text-green-400 transition-colors">{league.name}</h3>
+                        <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-6">{league.members.length} Members Enrolled</p>
+                        <div className="mt-auto pt-6 border-t border-gray-800 flex justify-between items-center">
+                          <span className="text-[9px] font-black uppercase tracking-widest text-gray-400 group-hover:text-white transition-colors">Access League Details →</span>
+                        </div>
+                      </div>
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
           </div>
-       </main>
+        )}
+
+        {activeTab === 'join' && (
+          <div className="space-y-6">
+             {publicLeagues.length === 0 ? (
+               <div className="text-center py-24 text-gray-600 text-xs font-black uppercase tracking-widest">No recruitment campaigns active.</div>
+             ) : (
+               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                 {publicLeagues.map(league => {
+                   const scoringFormat = league.settings?.scoringType || (league.settings?.ppr ? 'PPR' : 'Standard Scoring');
+
+                   return (
+                    <div key={league.id} className="bg-gray-900 rounded-2xl p-8 border border-gray-800 flex flex-col shadow-lg">
+                      <div className="flex flex-wrap gap-2 mb-6">
+                        <span className="px-2.5 py-1 text-[8px] font-black uppercase rounded tracking-[0.15em] bg-green-500/10 text-green-400 border border-green-500/20">
+                          {scoringFormat}
+                        </span>
+                      </div>
+                      <h3 className="text-xl font-black text-white mb-2 uppercase tracking-tight">{league.name}</h3>
+                      <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-8">Commish: <span className="text-gray-300">{league.ownerName || 'Unknown'}</span></p>
+                      <button 
+                        onClick={() => setJoiningLeague(league)}
+                        className="mt-auto w-full py-3 bg-gray-800 hover:bg-green-500 hover:text-black text-white font-black uppercase tracking-widest text-[10px] rounded-xl transition-all border border-gray-700 active:scale-95"
+                      >
+                        Join League
+                      </button>
+                    </div>
+                  );
+                 })}
+               </div>
+             )}
+          </div>
+        )}
+      </main>
+
+      {showCreateModal && user && <CreateLeagueModal onClose={() => setShowCreateModal(false)} user={user} />}
+      {joiningLeague && user && <LeagueJoinModal league={joiningLeague} user={user} onClose={() => setJoiningLeague(null)} />}
     </div>
   );
 }

@@ -1,15 +1,16 @@
 import { doc, setDoc, writeBatch } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 
-// --- TYPE DEFINITION (Optional) ---
-interface PlayerData {
+// --- TYPE DEFINITION ---
+export interface PlayerData {
   player_id: string;
   name: string;
   position: string;
   team?: string;
   fantasyPoints?: number;
   projectedPoints?: number;
-  // add other fields like opponent, status, etc.
+  // Allow dynamic fields (like 'weeks', 'opponent', etc.)
+  [key: string]: any; 
 }
 
 /**
@@ -27,7 +28,7 @@ export const updatePlayer = async (player: PlayerData) => {
   const playerRef = doc(db, 'players', player.player_id);
 
   // Merge: true ensures we update the fields provided without deleting existing ones
-  // (e.g. if you update points, you don't lose the player's photo URL)
+  // (e.g. if you update points, you don't lose the player's photo URL or 'weeks' data)
   await setDoc(playerRef, player, { merge: true });
 };
 
