@@ -1,16 +1,16 @@
 {
   "crons": [
     {
-      "path": "/api/admin/sync-projections",
-      "schedule": "0 10 * * *" 
-    }
-  ]
-}
-{
-  "crons": [
+      "path": "/api/sync-games?secret=Touchdown2026",
+      "schedule": "0 8 * * *"
+    },
     {
-      "path": "/api/sync-players",
-      "schedule": "0 14 * * 3"
+      "path": "/api/sync-scores?secret=Touchdown2026",
+      "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/update-member-scores?secret=Touchdown2026",
+      "schedule": "*/15 * * * *"
     }
   ]
 }
