@@ -2,11 +2,11 @@
   "crons": [
     {
       "path": "/api/sync-scores?secret=Touchdown2026",
-      "schedule": "0 1,5,17,21 * * *"
+      "schedule": "0 8 * * *"
     },
     {
       "path": "/api/update-member-scores?secret=Touchdown2026",
-      "schedule": "5 1,5,17,21 * * *"
+      "schedule": "5 8 * * *"
     }
   ]
 }
