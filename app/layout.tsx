@@ -1,10 +1,7 @@
 import './globals.css';
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
-
-// If you have a Sidebar component, import it here. 
-// If you are coding it inline, see the 'aside' tag below.
-// import Sidebar from '@/components/Sidebar'; 
+import Link from 'next/link'; // Import Link for navigation
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -21,31 +18,44 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${inter.className} bg-[#020617] text-white overflow-x-hidden`}>
-        <div className="flex min-h-screen relative">
+        
+        {/* CONTAINER: Vertical on Mobile (Header top), Horizontal on Desktop (Sidebar left) */}
+        <div className="flex min-h-screen flex-col md:flex-row relative">
           
-          {/* --- SIDEBAR FIX --- 
-              1. 'hidden': Hides it by default (Mobile)
-              2. 'md:block': Shows it only on medium screens and up (Desktop)
-              3. 'fixed' or 'sticky': Keeps it in place
-          */}
+          {/* --- MOBILE HEADER (Visible only on Mobile) --- */}
+          <header className="md:hidden flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-[#020617]/95 backdrop-blur-md sticky top-0 z-50">
+            {/* Logo */}
+            <div className="text-lg font-black italic tracking-tighter text-white uppercase select-none">
+               INVICTUS<span className="text-[#22c55e]">SPORTS</span>
+            </div>
+            
+            {/* Mobile Nav Links */}
+            <nav className="flex gap-4 text-xs font-black uppercase tracking-widest text-slate-400">
+               <Link href="/" className="hover:text-white transition-colors">Home</Link>
+               <Link href="/hub" className="hover:text-white transition-colors">Hub</Link>
+            </nav>
+          </header>
+
+          {/* --- DESKTOP SIDEBAR (Visible only on Desktop) --- */}
           <aside className="hidden md:block w-64 shrink-0 border-r border-slate-800 bg-[#020617] h-screen sticky top-0 overflow-y-auto z-40">
-            {/* YOUR SIDEBAR CONTENT GOES HERE.
-               If you have a <Sidebar /> component, wrap it in this aside tag 
-               or add the className="hidden md:block..." directly to your component.
-            */}
-             <div className="p-6">
-                <h1 className="text-xl font-black italic tracking-tighter text-white uppercase mb-6">
+             <div className="p-8">
+                <h1 className="text-2xl font-black italic tracking-tighter text-white uppercase mb-10 select-none">
                   INVICTUS<span className="text-[#22c55e]">SPORTS</span>
                 </h1>
-                {/* Add your nav links here if they aren't already */}
+                
+                {/* Desktop Nav Links */}
+                <nav className="flex flex-col gap-6">
+                  <Link href="/" className="text-slate-400 hover:text-white font-black uppercase tracking-widest text-sm transition-colors flex items-center gap-3">
+                    Home
+                  </Link>
+                  <Link href="/hub" className="text-slate-400 hover:text-white font-black uppercase tracking-widest text-sm transition-colors flex items-center gap-3">
+                    Hub
+                  </Link>
+                </nav>
              </div>
           </aside>
 
-          {/* --- MAIN CONTENT --- 
-              1. 'flex-1': Takes up remaining space
-              2. 'w-full': Ensures it doesn't shrink weirdly
-              3. 'max-w-[100vw]': Prevents horizontal scroll blowout
-          */}
+          {/* --- MAIN CONTENT --- */}
           <main className="flex-1 w-full max-w-[100vw] overflow-x-hidden">
             {children}
           </main>
