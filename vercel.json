@@ -6,11 +6,11 @@
     },
     {
       "path": "/api/sync-scores?secret=Touchdown2026",
-      "schedule": "*/10 * * * *"
+      "schedule": "0 1,5,17,21 * * *"
     },
     {
       "path": "/api/update-member-scores?secret=Touchdown2026",
-      "schedule": "*/15 * * * *"
+      "schedule": "5 1,5,17,21 * * *"
     }
   ]
 }
