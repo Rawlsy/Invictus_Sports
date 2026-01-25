@@ -1,19 +1,35 @@
+import './globals.css';
+import type { Metadata } from 'next';
+import { Inter } from 'next/font/google';
 import Navbar from "./components/Navbar"; 
-import "./globals.css";
+import Script from 'next/script';
 
-export const metadata = {
-  title: "Invictus Sports",
-  description: "Playoff Fantasy Challenge",
+const inter = Inter({ subsets: ['latin'] });
+
+export const metadata: Metadata = {
+  title: 'Invictus Sports',
+  description: 'Fantasy Sports League Manager',
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
     <html lang="en">
-      {/* ADDED: 'overflow-x-hidden' and 'max-w-[100vw]' 
-         This stops the horizontal scroll bar on mobile without affecting desktop.
-      */}
-      <body className="bg-gray-950 text-white min-h-screen flex flex-col font-sans overflow-x-hidden max-w-[100vw]">
+      <body className={`${inter.className} bg-gray-950 text-white min-h-screen flex flex-col font-sans overflow-x-hidden max-w-[100vw]`}>
+        
+        {/* --- GOOGLE ADSENSE SCRIPT --- */}
+        <Script
+          id="adsbygoogle-init"
+          strategy="afterInteractive"
+          crossOrigin="anonymous"
+          src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-3903014833331900" 
+        />
+
         <Navbar />
+        
         <main className="flex-grow w-full">
             {children}
         </main>

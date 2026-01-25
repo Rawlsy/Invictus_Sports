@@ -2,11 +2,10 @@
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-// FIXED: Added 'documentId' back to the imports
-import { doc, setDoc, updateDoc, deleteField, onSnapshot, collection, getDocs, query, where, documentId, limit, orderBy } from 'firebase/firestore'; 
+import { doc, setDoc, updateDoc, deleteField, onSnapshot, collection, getDocs, query, where, documentId, limit } from 'firebase/firestore'; 
 import { onAuthStateChanged, User } from 'firebase/auth'; 
 import { db, auth } from '@/lib/firebase'; 
-import { Lock, Search, ChevronLeft, Trash2, AlertCircle, CalendarClock, Trophy, Share2, Copy, Check, Users, Shield, Crown, Key } from 'lucide-react'; 
+import { Lock, Search, ChevronLeft, Trash2, AlertCircle, Trophy, Share2, Copy, Check, Users, Shield, Crown, Key, Edit2, Save, X } from 'lucide-react'; 
 
 const DB_LINEUP_KEYS = {
   wildcard: "Wild Card Lineup",
@@ -76,6 +75,9 @@ export default function LeaguePage() {
   const [leaguePassword, setLeaguePassword] = useState<string>("Loading..."); 
   const [leaguePrivacy, setLeaguePrivacy] = useState<string>("Private");
 
+  const [isEditingPassword, setIsEditingPassword] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+
   const [leaderboard, setLeaderboard] = useState<any[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
@@ -84,6 +86,7 @@ export default function LeaguePage() {
   const [isCopied, setIsCopied] = useState(false);
   const [isMember, setIsMember] = useState(true);
 
+  // AUTH CHECK
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
@@ -98,7 +101,7 @@ export default function LeaguePage() {
     return () => unsubscribe();
   }, [router]);
 
-  // 0. FETCH SYSTEM WEEK
+  // SYSTEM WEEK CHECK
   useEffect(() => {
     const sysRef = doc(db, 'system', 'nfl_state');
     const unsubscribe = onSnapshot(sysRef, (docSnap) => {
@@ -117,7 +120,7 @@ export default function LeaguePage() {
     return () => unsubscribe();
   }, []);
 
-  // FETCH LEAGUE DETAILS
+  // LEAGUE DETAILS FETCH
   useEffect(() => {
     if (!params.id) return;
     const leagueDocRef = doc(db, 'leagues', params.id as string);
@@ -229,7 +232,6 @@ export default function LeaguePage() {
         try {
             setIsLoadingLineup(true);
             const playersRef = collection(db, 'players');
-            // FIXED: documentId() is now correctly imported
             const q = query(playersRef, where(documentId(), 'in', playerIdsToFetch));
             const querySnapshot = await getDocs(q);
             
@@ -253,42 +255,31 @@ export default function LeaguePage() {
     return () => unsubscribe();
   }, [activeRound, params.id, userId, isMember]);
 
-  // FIX: AUTO-UPDATE USERNAME IF MISSING
+  // AUTO-FIX USERNAME
   useEffect(() => {
     if (!userId || !params.id || leaderboard.length === 0 || !authUser) return;
-
     const myEntry = leaderboard.find(m => m.id === userId);
-    
-    // If I exist in leaderboard BUT my username is missing
     if (myEntry && !myEntry.username) {
         const displayName = authUser.displayName || authUser.email?.split('@')[0] || 'Anonymous Member';
-        console.log("Fixing missing username for:", userId, "->", displayName);
-        
         const memberRef = doc(db, 'leagues', params.id as string, 'Members', userId);
         updateDoc(memberRef, { username: displayName }).catch(err => console.error("Failed to auto-fix username", err));
     }
   }, [userId, leaderboard, params.id, authUser]);
 
-  // 4. FETCH MODAL PLAYERS
+  // 4. FETCH MODAL PLAYERS (UPDATED: Fetch ALL by position, filter locally)
   const fetchPlayersForSlot = useCallback(async (slot: string) => {
     setModalPlayers([]); 
     const requiredPos = slot.replace(/[0-9]/g, ''); 
     
     try {
         const playersRef = collection(db, 'players');
-        let q;
-        const scoringKeys = SCORING_KEYS[leagueScoring] || SCORING_KEYS['PPR'];
-        // const sortField = `${ROUND_TO_DB_MAP[activeRound]}.${scoringKeys.proj}`;
-
-        if (requiredPos === 'FLEX') {
-             q = query(playersRef, where('position', 'in', ['RB', 'WR', 'TE']), limit(100)); 
-        } else if (requiredPos === 'DEF') {
-             q = query(playersRef, where('position', '==', 'DEF'), limit(50));
-        } else if (requiredPos === 'K') {
-             q = query(playersRef, where('position', '==', 'K'), limit(50));
-        } else {
-             q = query(playersRef, where('position', '==', requiredPos), limit(50));
-        }
+        
+        // UPDATE: Removed strict limit(50). Using limit(1000) guarantees we get 
+        // ALL players for that position. Then 'filteredPlayersList' below
+        // handles hiding the players whose teams aren't playing this week.
+        const q = requiredPos === 'FLEX' 
+            ? query(playersRef, where('position', 'in', ['RB', 'WR', 'TE']), limit(1500))
+            : query(playersRef, where('position', '==', requiredPos), limit(1000));
 
         const snapshot = await getDocs(q);
         const players = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -323,7 +314,6 @@ export default function LeaguePage() {
       }
   };
 
-  // SHARE
   const handleShare = () => {
       const url = window.location.href;
       navigator.clipboard.writeText(url).then(() => {
@@ -332,7 +322,6 @@ export default function LeaguePage() {
       });
   };
 
-  // Helpers
   const formatApiDate = (dateStr: string) => {
     if (!dateStr || dateStr.length !== 8) return dateStr;
     return `${dateStr.substring(4, 6)}/${dateStr.substring(6, 8)}`;
@@ -350,6 +339,50 @@ export default function LeaguePage() {
 
   const isRoundLocked = () => {
      return getRoundStatus(activeRound) !== 'active';
+  };
+
+  // --- UPDATED: GAME LOCK LOGIC (Handles "6:30P" and "2024-01-25") ---
+  const isGameLocked = (player: any) => {
+    const pTeam = player.team || player.Team;
+    const game = games.find(g => g['Home Team'] === pTeam || g['Away Team'] === pTeam);
+    
+    if (!game || !game.Date || !game.Time) return false;
+
+    // Parse Date: Handle "YYYYMMDD" (20260125) AND "YYYY-MM-DD" (2026-01-25)
+    let dateStr = String(game.Date);
+    let year, month, day;
+
+    if (dateStr.includes('-')) {
+        [year, month, day] = dateStr.split('-').map(Number);
+        month = month - 1; // 0-index month for Date()
+    } else {
+        year = parseInt(dateStr.substring(0, 4));
+        month = parseInt(dateStr.substring(4, 6)) - 1;
+        day = parseInt(dateStr.substring(6, 8));
+    }
+
+    // Parse Time: Handle "3:00 P", "3:00P", "3:00 PM", "3:00PM"
+    const timeStr = game.Time; 
+    const match = timeStr.match(/(\d+):(\d+)\s*([APap][Mm]?)/);
+    
+    if (!match) return false; 
+
+    let hours = parseInt(match[1], 10);
+    const minutes = parseInt(match[2], 10);
+    const modifier = match[3].toUpperCase(); // P, PM, A, AM
+
+    if (modifier.startsWith('P') && hours < 12) hours += 12;
+    if (modifier.startsWith('A') && hours === 12) hours = 0;
+
+    // Construct Date: Assume Eastern Time (UTC-5)
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    // Use ISO Format with Offset
+    const gameIsoString = `${year}-${pad(month + 1)}-${pad(day)}T${pad(hours)}:${pad(minutes)}:00-05:00`;
+    
+    const gameDate = new Date(gameIsoString);
+    const now = new Date();
+
+    return now >= gameDate;
   };
 
   const getPlayerProj = (p: any) => {
@@ -392,10 +425,18 @@ export default function LeaguePage() {
       .sort((a, b) => getPlayerProj(b) - getPlayerProj(a)); 
   }, [modalPlayers, searchTerm, games, activeRound, leagueScoring]);
 
+  // HANDLE SELECT PLAYER
   const handleSelectPlayer = async (player: any) => {
     if (previouslySelectedIds.has(player.id)) return;
     if (currentRoundIds.has(player.id) && lineup[selectedSlot!]?.id !== player.id) return;
-    if (!selectedSlot || !userId || isRoundLocked()) return;
+    if (!selectedSlot || !userId) return;
+    
+    // Check Locks
+    if (isRoundLocked()) return;
+    if (isGameLocked(player)) {
+        alert("This game has already started! Selections are locked.");
+        return;
+    }
 
     const dbKey = DB_LINEUP_KEYS[activeRound];
     const memberRef = doc(db, 'leagues', params.id as string, 'Members', userId);
@@ -407,9 +448,17 @@ export default function LeaguePage() {
     } catch (err) { console.error("Save error:", err); }
   };
 
-  const handleRemovePlayer = async (slotId: string, e: React.MouseEvent) => {
+  const handleRemovePlayer = async (slotId: string, e: React.MouseEvent, player: any) => {
     e.stopPropagation();
-    if (!userId || isRoundLocked()) return;
+    if (!userId) return;
+    
+    // Check Locks
+    if (isRoundLocked()) return;
+    if (player && isGameLocked(player)) {
+        alert("Cannot remove player. Their game has already started.");
+        return;
+    }
+
     const dbKey = DB_LINEUP_KEYS[activeRound];
     const memberRef = doc(db, 'leagues', params.id as string, 'Members', userId);
     try {
@@ -421,6 +470,19 @@ export default function LeaguePage() {
         });
     } catch (err) {
         console.error("Remove error:", err);
+    }
+  };
+  
+  // HANDLE PASSWORD SAVE
+  const handleSavePassword = async () => {
+    if (!params.id || !newPassword.trim()) return;
+    try {
+        const leagueRef = doc(db, 'leagues', params.id as string);
+        await updateDoc(leagueRef, { password: newPassword.trim() });
+        setLeaguePassword(newPassword.trim());
+        setIsEditingPassword(false);
+    } catch (error) {
+        console.error("Error updating password:", error);
     }
   };
 
@@ -441,12 +503,10 @@ export default function LeaguePage() {
     };
   }, [lineup, activeRound, leagueScoring]);
 
-  // LEADERBOARD CALCULATIONS
   const topUsers = useMemo(() => leaderboard.slice(0, 20), [leaderboard]);
   const currentUserData = useMemo(() => leaderboard.find(u => u.id === userId), [leaderboard, userId]);
   const isUserInTop = useMemo(() => topUsers.some(u => u.id === userId), [topUsers, userId]);
 
-  // HELPER: Get Display Name (Fallback to local Auth if DB is empty)
   const getUserDisplayName = (user: any) => {
       if (user.username) return user.username;
       if (user.id === userId && authUser) {
@@ -460,6 +520,8 @@ export default function LeaguePage() {
       const commish = leaderboard.find(m => m.id === ownerId);
       return commish ? (commish.username || 'Commissioner') : 'Commissioner';
   }, [leaderboard, ownerId]);
+
+  const isCommissioner = userId === ownerId;
 
   return (
     <div className="relative pb-24 bg-[#020617] min-h-screen text-white font-sans overflow-x-hidden">
@@ -588,7 +650,7 @@ export default function LeaguePage() {
                         <div className="divide-y divide-slate-800/50">
                             {POSITIONS.map(pos => {
                             const p = lineup[pos.id];
-                            const locked = isRoundLocked();
+                            const locked = isRoundLocked() || (p && isGameLocked(p)); // Check BOTH round lock AND game lock
                             const matchup = p ? getMatchupInfo(p.team || p.Team) : null;
                             return (
                                 <div key={pos.id} onClick={() => !locked && (setSelectedSlot(pos.id), setIsModalOpen(true))} className={`px-4 md:px-10 py-4 md:py-6 flex items-center group transition-all ${!locked ? 'cursor-pointer hover:bg-white/5' : 'opacity-60 cursor-not-allowed'}`}>
@@ -611,7 +673,8 @@ export default function LeaguePage() {
                                 </div>
                                 <div className="flex items-center gap-3 md:gap-4 pl-2">
                                     <div className="text-xl md:text-3xl font-black text-white tracking-tighter tabular-nums">{p ? getPlayerActual(p).toFixed(1) : '0.0'}</div>
-                                    {p && !locked && (<button onClick={(e) => handleRemovePlayer(pos.id, e)} className="p-2 bg-slate-800/50 hover:bg-red-500/20 text-slate-500 hover:text-red-500 rounded-lg transition-all" title="Remove"><Trash2 size={14} /></button>)}
+                                    {p && !locked && (<button onClick={(e) => handleRemovePlayer(pos.id, e, p)} className="p-2 bg-slate-800/50 hover:bg-red-500/20 text-slate-500 hover:text-red-500 rounded-lg transition-all" title="Remove"><Trash2 size={14} /></button>)}
+                                    {locked && p && <Lock size={14} className="text-red-500"/>}
                                 </div>
                                 </div>
                             );
@@ -686,7 +749,6 @@ export default function LeaguePage() {
             </div>
           )}
 
-          {/* DETAILS TAB */}
           {activeTab === 'Details' && (
             <div className="max-w-3xl mx-auto w-full px-2 space-y-6">
                 <div className="grid grid-cols-2 gap-4">
@@ -706,9 +768,37 @@ export default function LeaguePage() {
                         <div className="flex items-center gap-2 text-[#22c55e] text-xs font-black uppercase tracking-widest"><Shield size={14} /> Privacy</div>
                         <div className="text-lg font-bold text-white">{leaguePrivacy}</div>
                     </div>
+                    
                     <div className="bg-slate-900/80 border border-slate-800 p-5 rounded-2xl flex flex-col gap-2 col-span-2 md:col-span-1 md:col-start-1">
-                        <div className="flex items-center gap-2 text-[#22c55e] text-xs font-black uppercase tracking-widest"><Key size={14} /> Password</div>
-                        <div className="text-lg font-bold text-white font-mono tracking-widest">{leaguePassword}</div>
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2 text-[#22c55e] text-xs font-black uppercase tracking-widest"><Key size={14} /> Password</div>
+                            {isCommissioner && !isEditingPassword && (
+                                <button 
+                                    onClick={() => {
+                                        setNewPassword(leaguePassword);
+                                        setIsEditingPassword(true);
+                                    }}
+                                    className="p-1 text-slate-500 hover:text-white transition-colors"
+                                >
+                                    <Edit2 size={12} />
+                                </button>
+                            )}
+                        </div>
+
+                        {isEditingPassword ? (
+                            <div className="flex items-center gap-2 mt-1">
+                                <input 
+                                    type="text" 
+                                    value={newPassword} 
+                                    onChange={(e) => setNewPassword(e.target.value)}
+                                    className="bg-slate-950 border border-slate-700 text-white text-sm px-2 py-1 rounded w-full font-mono focus:border-[#22c55e] outline-none"
+                                />
+                                <button onClick={handleSavePassword} className="text-[#22c55e] hover:text-[#16a34a]"><Save size={16} /></button>
+                                <button onClick={() => setIsEditingPassword(false)} className="text-red-500 hover:text-red-400"><X size={16} /></button>
+                            </div>
+                        ) : (
+                            <div className="text-lg font-bold text-white font-mono tracking-widest">{leaguePassword}</div>
+                        )}
                     </div>
                 </div>
 
@@ -741,7 +831,6 @@ export default function LeaguePage() {
         </main>
       </div>
 
-      {/* Modal - Mobile Optimized */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#020617]/95 p-4 backdrop-blur-sm">
           <div className="bg-slate-900 w-full max-w-xl rounded-[2rem] flex flex-col max-h-[85vh] border border-slate-700 shadow-2xl overflow-hidden animate-in zoom-in duration-200">
@@ -754,7 +843,8 @@ export default function LeaguePage() {
                 filteredPlayersList.map(p => {
                     const isPrevUsed = previouslySelectedIds.has(p.id);
                     const isCurrUsed = currentRoundIds.has(p.id) && lineup[selectedSlot!]?.id !== p.id;
-                    const isDisabled = isPrevUsed || isCurrUsed;
+                    const isGameLockedForPlayer = isGameLocked(p);
+                    const isDisabled = isPrevUsed || isCurrUsed || isGameLockedForPlayer;
                     return (
                         <button key={p.id} onClick={() => !isDisabled && handleSelectPlayer(p)} disabled={isDisabled} className={`w-full text-left p-5 rounded-2xl flex justify-between items-center group transition-all border ${isDisabled ? 'bg-slate-900/50 border-transparent opacity-50 cursor-not-allowed' : 'hover:bg-white/5 border-transparent hover:border-[#22c55e]/30'}`}>
                         <div className="flex items-center space-x-5">
@@ -763,6 +853,7 @@ export default function LeaguePage() {
                                 <div className="flex items-center gap-2"><div className={`text-base font-bold tracking-tight leading-none transition-colors ${isDisabled ? 'text-slate-500' : 'text-white group-hover:text-[#22c55e]'}`}>{p.name || p.longName}</div>
                                     {isPrevUsed && (<span className="text-[9px] font-black uppercase tracking-widest bg-red-500/10 text-red-500 px-2 py-0.5 rounded border border-red-500/20">Previously Selected</span>)}
                                     {isCurrUsed && (<span className="text-[9px] font-black uppercase tracking-widest bg-yellow-500/10 text-yellow-500 px-2 py-0.5 rounded border border-yellow-500/20 flex items-center gap-1"><AlertCircle size={10} /> Active in Lineup</span>)}
+                                    {isGameLockedForPlayer && (<span className="text-[9px] font-black uppercase tracking-widest bg-red-500/10 text-red-500 px-2 py-0.5 rounded border border-red-500/20 flex items-center gap-1"><Lock size={10} /> LOCKED</span>)}
                                 </div>
                                 <div className="text-[10px] text-gray-500 uppercase font-black tracking-widest mt-2 flex items-center gap-2"><span className={isDisabled ? 'text-slate-600' : 'text-white font-black'}>{p.team}</span><span className="text-slate-800">•</span><span>{getMatchupInfo(p.team).opponent}</span></div>
                             </div>
