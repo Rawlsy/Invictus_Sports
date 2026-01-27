@@ -3,6 +3,7 @@ import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import Navbar from "./components/Navbar"; 
 import Script from 'next/script';
+import { Analytics } from '@vercel/analytics/next';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -56,6 +57,7 @@ export default function RootLayout({
         <main className="flex-grow w-full">
             {children}
         </main>
+        <Analytics />
       </body>
     </html>
   );
